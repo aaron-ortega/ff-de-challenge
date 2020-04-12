@@ -4,11 +4,14 @@
 
 import csv
 import sqlite3
+from io import BytesIO, StringIO
 from src.utils import start_logging
+from time import time
 
 LOGGER = start_logging(level='INFO', log_name=__name__)
 KEY_SET = set()
 DATA = '../data/FridgeGeo150.csv'
+BAD_DATA = '../data/bad_data.csv'
 # db = sqlite3.connect(':memory:')
 
 
@@ -63,6 +66,11 @@ def in_range(data):
 
 
 def main():
+    """ """
+    start = time()
+    stream = BytesIO()
+    bad_stream = StringIO()
+    bad_stream.write('Loc_key,Latitude,Longitude\n')
     with open(DATA) as file:
         reader = csv.DictReader(file, lineterminator='\n', delimiter=',')
         for row in reader:
@@ -71,9 +79,19 @@ def main():
                     and in_range(row):
                 pass
             else:
-                # TODO: Examine bad data
-                print(row)
+                bad_stream.write(f"{row['Loc_key']},{row['Latitude']},{row['Longitude']}\n")
                 continue
+
+            # Write to byte stream (mapbox api expects this format)
+            stream.write(f"{row['Latitude']},{row['Longitude']}\n".encode())
+        LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+
+    # Write bad rows to file
+    with open(BAD_DATA, 'w') as err_data:
+        err_data.write(bad_stream.getvalue())
+        bad_stream.close()
+
+    # TODO: integrate stream to mapbox
 
 
 if __name__ == '__main__':
