@@ -15,17 +15,18 @@ BAD_DATA = '../data/bad_data.csv'
 # db = sqlite3.connect(':memory:')
 
 
-def duplicate_key(key):
+def duplicate_key(key, key_set=None):
     """
     Checks if location key is duplicated
     Args:
         key: string key
+        key_set: contains the keys that have been checked
 
     Returns:
         Boolean denoting if key was duplicated
     """
-    if key not in KEY_SET:
-        KEY_SET.add(key)
+    if key not in key_set:
+        key_set.add(key)
         return False
     else:
         LOGGER.warning(f'Duplicate key found! Key: {key}')
@@ -74,7 +75,7 @@ def main():
     with open(DATA) as file:
         reader = csv.DictReader(file, lineterminator='\n', delimiter=',')
         for row in reader:
-            if not duplicate_key(row['Loc_key'])\
+            if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
                     and not type_error(row)\
                     and in_range(row):
                 pass
