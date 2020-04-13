@@ -3,16 +3,17 @@
 """
 
 import csv
-import sqlite3
 from io import BytesIO, StringIO
-from src.utils import start_logging
+from mapbox import Uploader
+from src.utils import start_logging, get_credentials
 from time import time
 
 LOGGER = start_logging(level='INFO', log_name=__name__)
 KEY_SET = set()
+CONFIG = get_credentials()
+TOKEN = CONFIG.get('mapbox-api', 'token')
 DATA = '../data/FridgeGeo150.csv'
 BAD_DATA = '../data/bad_data.csv'
-# db = sqlite3.connect(':memory:')
 
 
 def duplicate_key(key, key_set=None):
@@ -70,6 +71,7 @@ def main():
     """ """
     start = time()
     stream = BytesIO()
+    stream.write(b'{"coordinates": [')
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')
     with open(DATA) as file:
@@ -84,15 +86,27 @@ def main():
                 continue
 
             # Write to byte stream (mapbox api expects this format)
-            stream.write(f"{row['Latitude']},{row['Longitude']}\n".encode())
+            # TODO: Fix trailing comma error (bad geojson format)
+            # TODO: Try using yield func
+            stream.write(f"[{row['Longitude']},{row['Latitude']}],".encode())
+
+        stream.write(b', "type": "MultiPoint"}')
         LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+        stream.seek(0)
 
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
         err_data.write(bad_stream.getvalue())
         bad_stream.close()
 
-    # TODO: integrate stream to mapbox
+    # row_count = stream.getvalue().count(b'\n') - 1  # Exclude header
+
+    # Connect to mapbox API and upload stream
+    service = Uploader(access_token=TOKEN)
+    upload_response = service.upload(stream, 'test_1')
+
+    if upload_response.status_code == 201:
+        LOGGER.info('Stream processed!')
 
 
 if __name__ == '__main__':
