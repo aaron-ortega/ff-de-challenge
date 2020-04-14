@@ -141,4 +141,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--tile_name', required=True, help='reference name of uploaded data')
     args = parser.parse_args()
-    main(args.tile_name)
+
+    try:
+        main(args.tile_name)
+
+    except Exception:
+        # TODO: add Exception handling
+        # TODO: add notification if job fails/succeeds
+        pass
