@@ -104,8 +104,28 @@ def request_isochrone(coordinates):
     return res.json()
 
 
-def upload_to_mapbox():
-    return 0
+def upload_to_mapbox(data, type_=''):
+    """
+    Upload data to mapbox
+    Args:
+        data: data to be uploaded
+        type_: string detailing data (points, polygons, etc.)
+    """
+    stream = BytesIO()
+    stream.write(json.dumps(data).encode())
+    stream.seek(0)
+
+    # Connect to mapbox API and upload stream
+    service = Uploader(access_token=TOKEN)
+    upload_response = service.upload(stream, type_)
+
+    if upload_response.status_code == 201:
+        LOGGER.info(f'Status: 201; Mapbox received {type_} stream!')
+        stream.close()
+    else:
+        LOGGER.info(f'Other code')
+        print(f'{upload_response.status_code}, {upload_response.json()}')
+        # TODO: add handling of other status codes (400, 500, etc.)
 
 
 def main(tile_name):
@@ -129,13 +149,16 @@ def main(tile_name):
                 )
             else:
                 bad_stream.write(f"{row['Loc_key']},{row['Latitude']},{row['Longitude']}\n")
-                continue
 
         # Add meta to conform to Geojson specifications
         point_data['type'] = 'MultiPoint'
 
+    LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+
     # Collect all area reachable by foot (within 5 & 10 min)
     # for every coordinate
+    # TODO: I/O bottle neck try asyncio (FYI: API limit is 300 request/min)
+    start = time()
     isochrone_data = defaultdict(list)
     for point in point_data['coordinates']:
         result = request_isochrone(point)
@@ -145,33 +168,19 @@ def main(tile_name):
     # Add meta to conform to Geojson specifications
     isochrone_data['type'] = 'FeatureCollection'
 
-    # Write to byte stream (mapbox api expects this format)
-    stream = BytesIO()
-    stream.write(json.dumps(point_data).encode())
-    stream.seek(0)
-
-    LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+    LOGGER.info(f'Walkable area calculated in: {(time() - start):.2f} s')
     LOGGER.info(f'Number of coordinate points: {len(point_data["coordinates"])}')
 
+    upload_to_mapbox(point_data, type_=f'{tile_name}_points')
+    upload_to_mapbox(isochrone_data, type_=f'{tile_name}_polygons')
+
     # Release resources
-    del point_data
+    del point_data, isochrone_data
 
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
         err_data.write(bad_stream.getvalue())
         bad_stream.close()
-
-    # Connect to mapbox API and upload stream
-    service = Uploader(access_token=TOKEN)
-    upload_response = service.upload(stream, tile_name)
-
-    if upload_response.status_code == 201:
-        LOGGER.info(f'Status: 201; Mapbox received stream!')
-        stream.close()
-    else:
-        LOGGER.info(f'Other code')
-        print(f'{upload_response.status_code}, {upload_response.json()}')
-        # TODO: add handling of other status codes (400, 500, etc.)
 
 
 if __name__ == '__main__':
