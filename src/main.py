@@ -3,6 +3,8 @@
 """
 
 import csv
+import json
+from collections import defaultdict
 from io import BytesIO, StringIO
 from mapbox import Uploader
 from src.utils import start_logging, get_credentials
@@ -70,8 +72,7 @@ def in_range(data):
 def main():
     """ """
     start = time()
-    stream = BytesIO()
-    stream.write(b'{"coordinates": [')
+    clean_data = defaultdict(list)
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')
     with open(DATA) as file:
@@ -80,33 +81,44 @@ def main():
             if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
                     and not type_error(row)\
                     and in_range(row):
-                pass
+                clean_data['coordinates'].append([
+                    float(row['Longitude']),
+                    float(row['Latitude'])]
+                )
             else:
                 bad_stream.write(f"{row['Loc_key']},{row['Latitude']},{row['Longitude']}\n")
                 continue
 
-            # Write to byte stream (mapbox api expects this format)
-            # TODO: Fix trailing comma error (bad geojson format)
-            # TODO: Try using yield func
-            stream.write(f"[{row['Longitude']},{row['Latitude']}],".encode())
+        # Add meta to conform to Geojson specifications
+        clean_data['type'] = 'MultiPoint'
 
-        stream.write(b', "type": "MultiPoint"}')
-        LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
-        stream.seek(0)
+    # Write to byte stream (mapbox api expects this format)
+    stream = BytesIO()
+    stream.write(json.dumps(clean_data).encode())
+    stream.seek(0)
+
+    LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+    LOGGER.info(f'Number of coordinate points: {len(clean_data["coordinates"])}')
+
+    # Release resources
+    del clean_data
 
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
         err_data.write(bad_stream.getvalue())
         bad_stream.close()
 
-    # row_count = stream.getvalue().count(b'\n') - 1  # Exclude header
-
     # Connect to mapbox API and upload stream
     service = Uploader(access_token=TOKEN)
-    upload_response = service.upload(stream, 'test_1')
+    upload_response = service.upload(stream, 'test_2')
 
     if upload_response.status_code == 201:
-        LOGGER.info('Stream processed!')
+        LOGGER.info(f'Status: 201; Mapbox received stream!')
+        stream.close()
+    else:
+        LOGGER.info(f'Other code')
+        print(f'{upload_response.status_code}, {upload_response.json()}')
+        # TODO: add handling of other status codes (400, 500, etc.)
 
 
 if __name__ == '__main__':
