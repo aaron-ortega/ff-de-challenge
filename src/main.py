@@ -16,6 +16,7 @@ Eg.
 import argparse
 import csv
 import json
+import requests
 from collections import defaultdict
 from io import BytesIO, StringIO
 from mapbox import Uploader
@@ -81,13 +82,39 @@ def in_range(data):
     return _range
 
 
+def request_isochrone(coordinates):
+    """
+    Get walkable area of a given point using Mapbox API
+    Args:
+        coordinates: data point
+
+    Returns:
+        Geojson with 5 and 10 min walkable area
+    """
+    headers = {'Content-Type': 'application/json; charset=utf-8'}
+    params = {
+        'contours_minutes': '5,10',
+        'contours_colors': 'b53c2c,2c47dd',
+        'polygons': 'true',
+        'access_token': TOKEN
+    }
+    profile = 'mapbox/walking'
+    url = 'https://api.mapbox.com/isochrone/v1/{}/{},{}'.format(profile, *coordinates)
+    res = requests.get(url, headers=headers, params=params)
+    return res.json()
+
+
+def upload_to_mapbox():
+    return 0
+
+
 def main(tile_name):
     """
     Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
     Capture invalid data, pipe it to a StringIO stream, and store locally for examination.
     """
     start = time()
-    clean_data = defaultdict(list)
+    point_data = defaultdict(list)
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')  # Add header
     with open(DATA) as file:
@@ -96,7 +123,7 @@ def main(tile_name):
             if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
                     and not type_error(row)\
                     and in_range(row):
-                clean_data['coordinates'].append([
+                point_data['coordinates'].append([
                     float(row['Longitude']),
                     float(row['Latitude'])]
                 )
@@ -105,18 +132,29 @@ def main(tile_name):
                 continue
 
         # Add meta to conform to Geojson specifications
-        clean_data['type'] = 'MultiPoint'
+        point_data['type'] = 'MultiPoint'
+
+    # Collect all area reachable by foot (within 5 & 10 min)
+    # for every coordinate
+    isochrone_data = defaultdict(list)
+    for point in point_data['coordinates']:
+        result = request_isochrone(point)
+        isochrone_data['features'].append(result['features'][0])  # 5 min
+        isochrone_data['features'].append(result['features'][1])  # 10 min
+
+    # Add meta to conform to Geojson specifications
+    isochrone_data['type'] = 'FeatureCollection'
 
     # Write to byte stream (mapbox api expects this format)
     stream = BytesIO()
-    stream.write(json.dumps(clean_data).encode())
+    stream.write(json.dumps(point_data).encode())
     stream.seek(0)
 
     LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
-    LOGGER.info(f'Number of coordinate points: {len(clean_data["coordinates"])}')
+    LOGGER.info(f'Number of coordinate points: {len(point_data["coordinates"])}')
 
     # Release resources
-    del clean_data
+    del point_data
 
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
