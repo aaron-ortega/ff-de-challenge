@@ -40,8 +40,10 @@ def get_credentials(dir_='../config'):
     """
 
     config = configparser.ConfigParser()
-    secret_path = join(dir_, 'secrets.ini')
-    if exists(secret_path):
-        return config.read(secret_path)
+    public = join(dir_, 'config.ini')
+    secret = join(dir_, 'secrets.ini')
+    if exists(public) and exists(secret):
+        config.read([public, secret])
+        return config
     else:
         raise Exception('Config file(s) not in config path!')
