@@ -1,0 +1,2 @@
+mapbox==0.18.0
+requests==2.23.0

@@ -1,0 +1,4 @@
+-r requirements.txt
+folium==0.10.1
+pandas==1.0.3
+jupyterlab==2.1.0
