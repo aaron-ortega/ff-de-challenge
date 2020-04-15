@@ -38,7 +38,7 @@ def number_of_overlaps(data):
     if isinstance(data, defaultdict) and 'coordinates' in data.keys():
         count = []
         tile_query = Tilequery(access_token=TOKEN)
-        for datum in data:
+        for datum in data['coordinates']:
             response = tile_query.tilequery(TILESET_ID,
                                             lon=datum[0], lat=datum[1], radius=RADIUS, geometry='polygon', limit=50)
 
