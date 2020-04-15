@@ -67,6 +67,23 @@ def type_error(coordinates):
         return True
 
 
+def unique(row, unique_data):
+    """
+    Checks if the coordinate has already been added to the clean data
+    Args:
+        row:
+        unique_data:
+
+    Returns:
+        True - if data is new (unique)
+        False - if data already present
+    """
+    row = [float(row['Longitude']), float(row['Latitude'])]
+    if row not in unique_data:
+        return True
+    return False
+
+
 def in_range(data):
     """
     Checks if coordinates are outside the expected range.
@@ -141,7 +158,8 @@ def main(tile_name):
         reader = csv.DictReader(file, lineterminator='\n', delimiter=',')
         for row in reader:
             if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
-                    and not type_error(row)\
+                    and not type_error(row) \
+                    and unique(row, point_data['coordinates'])\
                     and in_range(row):
                 point_data['coordinates'].append([
                     float(row['Longitude']),
