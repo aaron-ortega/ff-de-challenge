@@ -20,6 +20,7 @@ import requests
 from collections import defaultdict
 from io import BytesIO, StringIO
 from mapbox import Uploader
+from src.compute import number_of_overlaps
 from src.utils import start_logging, get_credentials
 from time import time
 
@@ -29,6 +30,7 @@ CONFIG = get_credentials()
 TOKEN = CONFIG.get('mapbox-api', 'token')
 DATA = '../data/FridgeGeo150.csv'
 BAD_DATA = '../data/bad_data.csv'
+CLEAN_DATA = '../data/cleaned_data.csv'
 
 
 def duplicate_key(key, key_set=None):
@@ -145,6 +147,7 @@ def upload_to_mapbox(data, type_=''):
         # TODO: add handling of other status codes (400, 500, etc.)
 
 
+# def save_data(data):
 def main(tile_name):
     """
     Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
@@ -191,6 +194,9 @@ def main(tile_name):
 
     upload_to_mapbox(point_data, type_=f'{tile_name}_points')
     upload_to_mapbox(isochrone_data, type_=f'{tile_name}_polygons')
+
+    # Calculate fridge overlap
+    point_data['overlap'] = number_of_overlaps(point_data)
 
     # Release resources
     del point_data, isochrone_data
