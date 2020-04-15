@@ -16,6 +16,7 @@ Eg.
 import argparse
 import csv
 import json
+import requests
 from collections import defaultdict
 from io import BytesIO, StringIO
 from mapbox import Uploader
@@ -66,6 +67,23 @@ def type_error(coordinates):
         return True
 
 
+def unique(row, unique_data):
+    """
+    Checks if the coordinate has already been added to the clean data
+    Args:
+        row:
+        unique_data:
+
+    Returns:
+        True - if data is new (unique)
+        False - if data already present
+    """
+    row = [float(row['Longitude']), float(row['Latitude'])]
+    if row not in unique_data:
+        return True
+    return False
+
+
 def in_range(data):
     """
     Checks if coordinates are outside the expected range.
@@ -81,59 +99,106 @@ def in_range(data):
     return _range
 
 
+def request_isochrone(coordinates):
+    """
+    Get walkable area of a given point using Mapbox API
+    Args:
+        coordinates: data point
+
+    Returns:
+        Geojson with 5 and 10 min walkable area
+    """
+    headers = {'Content-Type': 'application/json; charset=utf-8'}
+    params = {
+        'contours_minutes': '5,10',
+        'contours_colors': 'b53c2c,2c47dd',
+        'polygons': 'true',
+        'access_token': TOKEN
+    }
+    profile = 'mapbox/walking'
+    url = 'https://api.mapbox.com/isochrone/v1/{}/{},{}'.format(profile, *coordinates)
+    res = requests.get(url, headers=headers, params=params)
+    return res.json()
+
+
+def upload_to_mapbox(data, type_=''):
+    """
+    Upload data to mapbox
+    Args:
+        data: data to be uploaded
+        type_: string detailing data (points, polygons, etc.)
+    """
+    stream = BytesIO()
+    stream.write(json.dumps(data).encode())
+    stream.seek(0)
+
+    # Connect to mapbox API and upload stream
+    service = Uploader(access_token=TOKEN)
+    upload_response = service.upload(stream, type_)
+
+    if upload_response.status_code == 201:
+        LOGGER.info(f'Status: 201; Mapbox received {type_} stream!')
+        stream.close()
+    else:
+        LOGGER.info(f'Other code')
+        print(f'{upload_response.status_code}, {upload_response.json()}')
+        # TODO: add handling of other status codes (400, 500, etc.)
+
+
 def main(tile_name):
     """
     Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
     Capture invalid data, pipe it to a StringIO stream, and store locally for examination.
     """
     start = time()
-    clean_data = defaultdict(list)
+    point_data = defaultdict(list)
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')  # Add header
     with open(DATA) as file:
         reader = csv.DictReader(file, lineterminator='\n', delimiter=',')
         for row in reader:
             if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
-                    and not type_error(row)\
+                    and not type_error(row) \
+                    and unique(row, point_data['coordinates'])\
                     and in_range(row):
-                clean_data['coordinates'].append([
+                point_data['coordinates'].append([
                     float(row['Longitude']),
                     float(row['Latitude'])]
                 )
             else:
                 bad_stream.write(f"{row['Loc_key']},{row['Latitude']},{row['Longitude']}\n")
-                continue
 
         # Add meta to conform to Geojson specifications
-        clean_data['type'] = 'MultiPoint'
-
-    # Write to byte stream (mapbox api expects this format)
-    stream = BytesIO()
-    stream.write(json.dumps(clean_data).encode())
-    stream.seek(0)
+        point_data['type'] = 'MultiPoint'
 
     LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
-    LOGGER.info(f'Number of coordinate points: {len(clean_data["coordinates"])}')
+
+    # Collect all area reachable by foot (within 5 & 10 min)
+    # for every coordinate
+    # TODO: I/O bottle neck try asyncio (FYI: API limit is 300 request/min)
+    start = time()
+    isochrone_data = defaultdict(list)
+    for point in point_data['coordinates']:
+        result = request_isochrone(point)
+        isochrone_data['features'].append(result['features'][0])  # 5 min
+        isochrone_data['features'].append(result['features'][1])  # 10 min
+
+    # Add meta to conform to Geojson specifications
+    isochrone_data['type'] = 'FeatureCollection'
+
+    LOGGER.info(f'Walkable area calculated in: {(time() - start):.2f} s')
+    LOGGER.info(f'Number of coordinate points: {len(point_data["coordinates"])}')
+
+    upload_to_mapbox(point_data, type_=f'{tile_name}_points')
+    upload_to_mapbox(isochrone_data, type_=f'{tile_name}_polygons')
 
     # Release resources
-    del clean_data
+    del point_data, isochrone_data
 
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
         err_data.write(bad_stream.getvalue())
         bad_stream.close()
-
-    # Connect to mapbox API and upload stream
-    service = Uploader(access_token=TOKEN)
-    upload_response = service.upload(stream, tile_name)
-
-    if upload_response.status_code == 201:
-        LOGGER.info(f'Status: 201; Mapbox received stream!')
-        stream.close()
-    else:
-        LOGGER.info(f'Other code')
-        print(f'{upload_response.status_code}, {upload_response.json()}')
-        # TODO: add handling of other status codes (400, 500, etc.)
 
 
 if __name__ == '__main__':
