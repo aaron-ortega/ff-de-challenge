@@ -1,5 +1,7 @@
 # Farmer's Fridge Data Engineering Coding Exercise
 
+Solutions can be found [here](./solutions.md).
+
 ## Problem Statement
 
 As a data engineer within the Farmer's Fridge tech team, you will be responsible for building a robust and scalable data platform while also working within a cross-functional capacity with various teams on their unique data needs. Often times, this will entail bringing in new data, integrating disparate datasets, and cleaning and shaping the data.
