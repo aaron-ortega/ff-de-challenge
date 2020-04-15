@@ -28,14 +28,13 @@ a mapping API outside of basic geocoding.
         - overlap count per coordinate
     - Steps:
         1. Setup AWS Cloudwatch to capture logging that's already in code
-        2. Setup dashboard to display job metrics to via AWS kinesis or any stream service (each calculated metric
+        2. Setup dashboard to display job metrics via AWS Kinesis or any stream service (each calculated metric
         can be viewed as an event) 
         3. Setup a CI/CD that builds and deploys to AWS ECS every time the development branch merges into
         master. Deployment step is a two parter: first merge to master and a manual OK to prevent
         accidental merges.
         4. Setup alerting (sucess/fail) via slack or victorOps to DE team and product owner.
         5. Follow product team requests and deliver outputs to database or s3.
-        5. And a 4-leaf clover for good measure (jk)
 
     - Other things to consider:
         1. Team SLA
