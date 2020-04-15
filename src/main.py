@@ -22,7 +22,7 @@ from io import BytesIO, StringIO
 from mapbox import Uploader
 from src.compute import number_of_overlaps
 from src.utils import start_logging, get_credentials
-from time import time
+from time import time, sleep
 
 LOGGER = start_logging(level='INFO', log_name=__name__)
 KEY_SET = set()
@@ -142,12 +142,21 @@ def upload_to_mapbox(data, type_=''):
         LOGGER.info(f'Status: 201; Mapbox received {type_} stream!')
         stream.close()
     else:
-        LOGGER.info(f'Other code')
-        print(f'{upload_response.status_code}, {upload_response.json()}')
         # TODO: add handling of other status codes (400, 500, etc.)
+        LOGGER.info(f'Other code')
+        LOGGER.warning(f'{upload_response.status_code}, {upload_response.json()}')
+
+    # TODO: refactor code this can be done better
+    # Wait until data is fully uploaded
+    upload_id = upload_response.json()['id']
+    while True:
+        status_resp = service.status(upload_id).json()
+        if status_resp['complete']:
+            break
+        sleep(3)
+    LOGGER.info(f'Completed Upload: {type_}')
 
 
-# def save_data(data):
 def main(tile_name):
     """
     Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
