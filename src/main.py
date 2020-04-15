@@ -2,9 +2,11 @@
 This script does the following:
     1. Ingests coordinates data
     2. Separates valid and invalid data
-    3. Saves (to disk) invalid data for review
+    3. Saves (to ./data) invalid data for review
     4. Transforms valid data from csv to Geojson
     5. Integrates geojson to Mapbox
+    6. Calculates number of fridge overlap
+    7. Saves (to ./data) valid data w/overlap count
 
 How to run:
     python3 ./src/main.py --tile_name <NAME>
@@ -20,8 +22,9 @@ import requests
 from collections import defaultdict
 from io import BytesIO, StringIO
 from mapbox import Uploader
+from src.compute import number_of_overlaps
 from src.utils import start_logging, get_credentials
-from time import time
+from time import time, sleep
 
 LOGGER = start_logging(level='INFO', log_name=__name__)
 KEY_SET = set()
@@ -29,6 +32,7 @@ CONFIG = get_credentials()
 TOKEN = CONFIG.get('mapbox-api', 'token')
 DATA = '../data/FridgeGeo150.csv'
 BAD_DATA = '../data/bad_data.csv'
+CLEAN_DATA = '../data/cleaned_data.json'
 
 
 def duplicate_key(key, key_set=None):
@@ -132,6 +136,7 @@ def upload_to_mapbox(data, type_=''):
     stream.write(json.dumps(data).encode())
     stream.seek(0)
 
+    start = time()
     # Connect to mapbox API and upload stream
     service = Uploader(access_token=TOKEN)
     upload_response = service.upload(stream, type_)
@@ -140,9 +145,20 @@ def upload_to_mapbox(data, type_=''):
         LOGGER.info(f'Status: 201; Mapbox received {type_} stream!')
         stream.close()
     else:
-        LOGGER.info(f'Other code')
-        print(f'{upload_response.status_code}, {upload_response.json()}')
         # TODO: add handling of other status codes (400, 500, etc.)
+        LOGGER.info(f'Other code')
+        LOGGER.warning(f'{upload_response.status_code}, {upload_response.json()}')
+
+    # TODO: refactor code this can be done better
+    # Wait until data is fully uploaded
+    upload_id = upload_response.json()['id']
+    while True:
+        status_resp = service.status(upload_id).json()
+        if status_resp['complete']:
+            break
+        sleep(3)
+    LOGGER.info(f'Completed Upload: {type_}')
+    LOGGER.info(f'Time: {time() - start:.2f} s')
 
 
 def main(tile_name):
@@ -151,6 +167,7 @@ def main(tile_name):
     Capture invalid data, pipe it to a StringIO stream, and store locally for examination.
     """
     start = time()
+    key_data = []
     point_data = defaultdict(list)
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')  # Add header
@@ -165,6 +182,7 @@ def main(tile_name):
                     float(row['Longitude']),
                     float(row['Latitude'])]
                 )
+                key_data.append(row['Loc_key'])
             else:
                 bad_stream.write(f"{row['Loc_key']},{row['Latitude']},{row['Longitude']}\n")
 
@@ -192,6 +210,15 @@ def main(tile_name):
     upload_to_mapbox(point_data, type_=f'{tile_name}_points')
     upload_to_mapbox(isochrone_data, type_=f'{tile_name}_polygons')
 
+    # Calculate fridge overlap
+    point_data['overlap'] = number_of_overlaps(point_data)
+
+    # Add location keys
+    point_data['Loc_key'] = key_data
+
+    with open(CLEAN_DATA, 'w') as f:
+        f.write(json.dumps(point_data))
+
     # Release resources
     del point_data, isochrone_data
 
@@ -199,6 +226,8 @@ def main(tile_name):
     with open(BAD_DATA, 'w') as err_data:
         err_data.write(bad_stream.getvalue())
         bad_stream.close()
+
+    LOGGER.info('Done.')
 
 
 if __name__ == '__main__':
