@@ -25,9 +25,10 @@ from mapbox import Tilequery
 from src.utils import get_credentials
 
 CONFIG = get_credentials()
+USERNAME = CONFIG.get('mapbox-api', 'username')
 TOKEN = CONFIG.get('mapbox-api', 'token')
 LAYER = 'chicago_milwaukee_data_polygons'
-TILESET_ID = f'aortega04.{LAYER}'
+TILESET_ID = f'{USERNAME}.{LAYER}'
 
 # Distance between point and polygon overlap
 RADIUS = 0
