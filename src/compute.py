@@ -34,7 +34,14 @@ RADIUS = 0
 
 
 def number_of_overlaps(data):
-    """"""
+    """
+    Count the number of polygons (walkable area) that overlaps a point (fridge)
+    Args:
+        data: dict w/fridge coordinates
+
+    Returns:
+        count - list w/number of overlaps for each point
+    """
     if isinstance(data, defaultdict) and 'coordinates' in data.keys():
         count = []
         tile_query = Tilequery(access_token=TOKEN)
