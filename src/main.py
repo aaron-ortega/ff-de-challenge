@@ -21,8 +21,9 @@ import json
 import requests
 from collections import defaultdict
 from io import BytesIO, StringIO
-from mapbox import Uploader
-from src.compute import number_of_overlaps
+from mapbox import Tilequery, Uploader
+from prefect import task, Flow
+from src.validate_fns import duplicate_key, in_range, type_error, unique
 from src.utils import start_logging, get_credentials
 from time import time, sleep
 
@@ -30,77 +31,15 @@ LOGGER = start_logging(level='INFO', log_name=__name__)
 KEY_SET = set()
 CONFIG = get_credentials()
 TOKEN = CONFIG.get('mapbox-api', 'token')
+USERNAME = CONFIG.get('mapbox-api', 'username')
+LAYER = 'chicago_milwaukee_data_polygons'
+TILESET_ID = f'{USERNAME}.{LAYER}'
 DATA = '../data/FridgeGeo150.csv'
 BAD_DATA = '../data/bad_data.csv'
 CLEAN_DATA = '../data/cleaned_data.json'
 
-
-def duplicate_key(key, key_set=None):
-    """
-    Checks if location key is duplicated
-    Args:
-        key: string key
-        key_set: contains the keys that have been checked
-
-    Returns:
-        Boolean denoting if key was duplicated
-    """
-    if key not in key_set:
-        key_set.add(key)
-        return False
-    else:
-        LOGGER.warning(f'Duplicate key found! Key: {key}')
-        return True
-
-
-def type_error(coordinates):
-    """
-    Check if coordinate values are float type
-    Args:
-        coordinates: data with information
-
-    Returns:
-        None - type is valid float
-        True - type is not valid
-    """
-    try:
-        float(coordinates['Latitude'])
-        float(coordinates['Longitude'])
-    except ValueError:
-        LOGGER.warning(f"Bad coordinates: ({coordinates['Latitude']},{coordinates['Longitude']})")
-        return True
-
-
-def unique(row, unique_data):
-    """
-    Checks if the coordinate has already been added to the clean data
-    Args:
-        row:
-        unique_data:
-
-    Returns:
-        True - if data is new (unique)
-        False - if data already present
-    """
-    row = [float(row['Longitude']), float(row['Latitude'])]
-    if row not in unique_data:
-        return True
-    return False
-
-
-def in_range(data):
-    """
-    Checks if coordinates are outside the expected range.
-    The range values where determined in profile_data.ipynb and correspond w/Milwaukee
-    and the Greater Chicago Metro area.
-    Args:
-        data: coordinate info
-
-    Returns:
-        _range: boolean determining if coordinate is within range
-    """
-    _range = (44 > float(data['Latitude']) > 41) and (-87 > float(data['Longitude']) > -89)
-    return _range
+# Distance between point and polygon overlap
+RADIUS = 0
 
 
 def request_isochrone(coordinates):
@@ -125,6 +64,7 @@ def request_isochrone(coordinates):
     return res.json()
 
 
+@task
 def upload_to_mapbox(data, type_=''):
     """
     Upload data to mapbox
@@ -161,22 +101,20 @@ def upload_to_mapbox(data, type_=''):
     LOGGER.info(f'Time: {time() - start:.2f} s')
 
 
-def main(tile_name):
-    """
-    Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
-    Capture invalid data, pipe it to a StringIO stream, and store locally for examination.
-    """
+@task
+def transform_data(dirty_data):
+    # Words
     start = time()
     key_data = []
     point_data = defaultdict(list)
     bad_stream = StringIO()
     bad_stream.write('Loc_key,Latitude,Longitude\n')  # Add header
-    with open(DATA) as file:
+    with open(dirty_data) as file:
         reader = csv.DictReader(file, lineterminator='\n', delimiter=',')
         for row in reader:
-            if not duplicate_key(row['Loc_key'], key_set=KEY_SET)\
+            if not duplicate_key(row['Loc_key'], key_set=KEY_SET) \
                     and not type_error(row) \
-                    and unique(row, point_data['coordinates'])\
+                    and unique(row, point_data['coordinates']) \
                     and in_range(row):
                 point_data['coordinates'].append([
                     float(row['Longitude']),
@@ -189,43 +127,92 @@ def main(tile_name):
         # Add meta to conform to Geojson specifications
         point_data['type'] = 'MultiPoint'
 
-    LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+    # Add location keys
+    point_data['Loc_key'] = key_data
 
-    # Collect all area reachable by foot (within 5 & 10 min)
-    # for every coordinate
-    # TODO: I/O bottle neck try asyncio (FYI: API limit is 300 request/min)
+    LOGGER.info(f'Transform time is {1e3 * (time() - start):.2f} ms')
+    LOGGER.info(f'Number of coordinate points: {len(point_data["coordinates"])}')
+    return point_data, bad_stream
+
+
+@task
+def extract_isochrone_data(data):
     start = time()
     isochrone_data = defaultdict(list)
-    for point in point_data['coordinates']:
+    for point in data['coordinates']:
         result = request_isochrone(point)
         isochrone_data['features'].append(result['features'][0])  # 5 min
         isochrone_data['features'].append(result['features'][1])  # 10 min
 
     # Add meta to conform to Geojson specifications
     isochrone_data['type'] = 'FeatureCollection'
-
     LOGGER.info(f'Walkable area calculated in: {(time() - start):.2f} s')
-    LOGGER.info(f'Number of coordinate points: {len(point_data["coordinates"])}')
+    return isochrone_data
 
-    upload_to_mapbox(point_data, type_=f'{tile_name}_points')
-    upload_to_mapbox(isochrone_data, type_=f'{tile_name}_polygons')
 
-    # Calculate fridge overlap
-    point_data['overlap'] = number_of_overlaps(point_data)
-
-    # Add location keys
-    point_data['Loc_key'] = key_data
-
-    with open(CLEAN_DATA, 'w') as f:
-        f.write(json.dumps(point_data))
-
-    # Release resources
-    del point_data, isochrone_data
-
+@task
+def save_bad_data(bad_data):
     # Write bad rows to file
     with open(BAD_DATA, 'w') as err_data:
-        err_data.write(bad_stream.getvalue())
-        bad_stream.close()
+        err_data.write(bad_data.getvalue())
+        bad_data.close()
+
+
+@task
+def number_of_overlaps(data):
+    """
+    Count the number of polygons (walkable area) that overlaps a point (fridge)
+    Args:
+        data: dict w/fridge coordinates
+
+    Returns:
+        count - list w/number of overlaps for each point
+    """
+    if isinstance(data, defaultdict) and 'coordinates' in data.keys():
+        count = []
+        tile_query = Tilequery(access_token=TOKEN)
+        for datum in data['coordinates']:
+            response = tile_query.tilequery(TILESET_ID,
+                                            lon=datum[0], lat=datum[1], radius=RADIUS, geometry='polygon', limit=50)
+
+            if response.status_code == 200:
+                overlap_count = len(response.json()['features']) - 2  # see "How to calculate overlap"
+                count.append(overlap_count)
+
+        # TODO: add handling of other status codes (400, 500, etc.)
+        return count
+
+    else:
+        raise Exception('data must be a dict-like obj with a "coordinates" key')
+
+
+@task
+def save_data(final_data):
+    with open(CLEAN_DATA, 'w') as f:
+        f.write(json.dumps(final_data))
+
+
+def main(tile_name):
+    """
+    Capture valid data, pipe it to a BytesIO stream, and store it to our Mapbox account.
+    Capture invalid data, pipe it to a StringIO stream, and store locally for examination.
+    """
+    with Flow('ff-de-challenge') as flow:
+        transformed = transform_data(DATA)
+        walkable_areas = extract_isochrone_data(transformed[0])
+        save_bad_data(transformed[1])
+
+        upload_to_mapbox(transformed[0], type_=f'{tile_name}_points')
+        upload_to_mapbox(walkable_areas, type_=f'{tile_name}_polygons')
+
+        # Calculate fridge overlap
+        # cleaned['overlap'] = number_of_overlaps(cleaned)
+        # save_data(cleaned)
+        flow.visualize()
+
+    # Collect all area reachable by foot (within 5 & 10 min)
+    # for every coordinate
+    # TODO: I/O bottle neck try asyncio (FYI: API limit is 300 request/min)
 
     LOGGER.info('Done.')
 
@@ -242,4 +229,4 @@ if __name__ == '__main__':
     except Exception:
         # TODO: add Exception handling
         # TODO: add notification if job fails/succeeds
-        pass
+        LOGGER.exception('Error')
