@@ -187,9 +187,10 @@ def number_of_overlaps(data):
 
 
 @task
-def save_data(final_data):
+def save_data(overlaps, data):
+    data['overlaps'] = overlaps
     with open(CLEAN_DATA, 'w') as f:
-        f.write(json.dumps(final_data))
+        f.write(json.dumps(data))
 
 
 def main(tile_name):
@@ -206,10 +207,10 @@ def main(tile_name):
         upload_to_mapbox(walkable_areas, type_=f'{tile_name}_polygons')
 
         # Calculate fridge overlap
-        # cleaned['overlap'] = number_of_overlaps(cleaned)
-        # save_data(cleaned)
-        flow.visualize()
-
+        overlaps = number_of_overlaps(transformed[0])
+        save_data(overlaps, transformed[0])
+        # flow.visualize()
+        flow.run()
     # Collect all area reachable by foot (within 5 & 10 min)
     # for every coordinate
     # TODO: I/O bottle neck try asyncio (FYI: API limit is 300 request/min)
